@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# DADOS (O MAIS IMPORTANTE)
+data/*.csv
+data/*.xlsx
+# Se o seu geojson final for menor que 50MB, não precisa ignorar. 
+# Se for maior, adicione a linha abaixo:
+# data/*.geojson
+
+# Sistema
+.DS_Store
+Thumbs.db
