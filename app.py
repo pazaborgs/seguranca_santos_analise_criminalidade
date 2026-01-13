@@ -42,36 +42,47 @@ except Exception as e:
 
 # --- Barra de Filtros (lateral) ---
 
+# === Criando os Filtros ===
+
 st.sidebar.header('Filtros')
 
 # Filtro de Visão
 
-st.sidebar.markdown('#### 🎯 Foco da Análise')
-map_vision = st.sidebar.radio(
-    'O que você quer visualizar?',
-    options=['Geral (Tudo)', 'Violência (Roubos)', 'Patrimônio (Furtos)', 'Crimes Graves a Vida', 'Drogas e Armas', 'Acidentes'],
-    help='Isso mudará as cores e as notas do mapa baseadas no tipo de crime selecionado.'
-)
-
 map_col_dict = {
     'Geral (Tudo)': 'TOTAL_DANGER_SCORE',
-    'Violência (Roubos)': 'Roubos (Geral)',
-    'Patrimônio (Furtos)': 'Furtos (Geral)',
+    'Violência (Roubos em Geral)': 'Roubos (Geral)',
+    'Roubo de Veículos': 'Roubo de Veículos',
+    'Patrimônio (Furtos em Geral)': 'Furtos (Geral)',
+    'Furto de Veículos': 'Furto de Veículos', 
     'Crimes contra a Vida': 'Crimes contra a Vida',
+    'Agressão e Lesão Corporal': 'Agressão / Lesão',
+    'Crimes Sexuais': 'Crimes Sexuais',
     'Drogas e Armas': 'Drogas e Armas',
     'Acidentes': 'Acidentes de Trânsito'
 }
 
-active_column = map_col_dict.get(map_vision, 'TOTAL_DANGER_SCORE')
+st.sidebar.markdown('#### 🎯 Foco da Análise')
+map_vision = st.sidebar.radio(
+    'O que você quer visualizar?',
+    options=list(map_col_dict.keys()),
+    help='Isso mudará as cores e as notas do mapa baseadas no tipo de crime selecionado.'
+)
 
 # Filtro de Período
 
-st.sidebar.markdown('#### 🌙 Período')
-period_selected = st.sidebar.selectbox(
-    'Horário da Ocorrência',
-    options=['Dia e Noite', 'Apenas Noite', 'Apenas Dia'],
-    index=0
-)
+disable_time_filter = (map_vision != "Geral (Tudo)")
+
+st.sidebar.markdown("#### 🌙 Período")
+
+if disable_time_filter:
+    st.sidebar.info("⚠️ Filtro de horário disponível apenas na visão 'Geral'.")
+    period_selected = "Dia e Noite" # Force
+else:
+    period_selected = st.sidebar.selectbox(
+        "Horário da Ocorrência",
+        options=["Dia e Noite", "Apenas Noite", "Apenas Dia"],
+        index=0
+    )
 
 # Filtro de Notas de Segurança
 
@@ -87,20 +98,56 @@ neighborhood_selected = st.sidebar.multiselect('Escolha para comparar (Vazio = T
                                                default = None, 
                                                placeholder = 'Selecione os bairros')
 
-# Aplicação dos filtros
+# === Aplicando os Filtros ===
 
 filtered_data = geodata.copy()
 
-# 1. Define a coluna ativa baseada na visão do mapa
+# Filtro de 'block' Período
 
-if active_column in filtered_data.columns:
-    filtered_data['FILTERED_OCCURRENCES'] = filtered_data[active_column].fillna(0)
-    target_values = np.sqrt(filtered_data[active_column].fillna(0))
+target_column_color = "TOTAL_DANGER_SCORE" # O que define a Gravidade é a soma dos pesos
+target_column_text  = "TOTAL_CRIMES"       # O que o usuário lê é a quantidade de crimes
+metric_title = "Total de Ocorrências"
+show_weight_in_tooltip = False
+
+if map_vision == 'Geral (Tudo)':
+    if period_selected == 'Apenas Noite':
+        target_column_color = "NIGHT_CRIMES" 
+        target_column_text  = "NIGHT_CRIMES"
+        metric_title = "Ocorrências Noturnas"
+        show_weight_in_tooltip = False
+        
+    elif period_selected == 'Apenas Dia':
+        target_column_color = "DAY_CRIMES"
+        target_column_text  = "DAY_CRIMES"
+        metric_title = "Ocorrências Diurnas"
+        show_weight_in_tooltip = False
+        
+    else:
+        target_column_color = "TOTAL_DANGER_SCORE"
+        target_column_text  = "TOTAL_CRIMES"
+        metric_title = "Total de Ocorrências"
+        show_weight_in_tooltip = True
+
 else:
-    filtered_data['FILTERED_OCCURRENCES'] = filtered_data['TOTAL_CRIMES']
-    target_values = np.sqrt(filtered_data['TOTAL_DANGER_SCORE'].fillna(0))
+    col_name = map_col_dict.get(map_vision, "TOTAL_CRIMES")
+    target_column_color = col_name         
+    target_column_text  = col_name
+    metric_title = map_vision
+    show_weight_in_tooltip = False
 
-# Recalcula o Score
+
+if target_column_color in filtered_data.columns:
+    
+    filtered_data['DISPLAY_METRIC'] = filtered_data[target_column_text].fillna(0).astype(int) # Texto
+    filtered_data['WEIGHT_METRIC'] = filtered_data[target_column_color].fillna(0).astype(int) # Cor
+    target_values = np.sqrt(filtered_data['WEIGHT_METRIC'])                                   # Escala
+
+else:
+    filtered_data['DISPLAY_METRIC'] = filtered_data['TOTAL_CRIMES'].fillna(0).astype(int)
+    filtered_data['WEIGHT_METRIC']  = filtered_data['TOTAL_DANGER_SCORE'].fillna(0).astype(int)
+    target_values = np.sqrt(filtered_data['WEIGHT_METRIC'])
+
+# Cálculo do Score
 
 min_v, max_v = target_values.min(), target_values.max()
 
@@ -108,8 +155,6 @@ if max_v > min_v:
     
     # Normalizamos de 0 a 9
     relative_score = (target_values - min_v) / (max_v - min_v) * 9
-    
-    # Subtraímos de 10, resultando em uma escala de 10.0 a 1.0
     filtered_data['SAFETY_SCORE'] = 10 - relative_score
 else:
     filtered_data['SAFETY_SCORE'] = 10.0
@@ -126,12 +171,6 @@ if neighborhood_selected:
 # Filtro de Nota Mínima
 
 filtered_data = filtered_data[filtered_data['SAFETY_SCORE'] >= min_safety]
-
-# Filtro de Período
-
-if period_selected == 'Apenas Noite':
-    # Aqui você pode decidir se filtra por volume de crimes noturnos
-    filtered_data = filtered_data[filtered_data['NIGHT_CRIMES'] > 0]
 
 # --- KPIs ---
 
@@ -156,7 +195,7 @@ if not filtered_data.empty:
     # Cálculos e métricas
 
     local_average_safety = filtered_data['SAFETY_SCORE'].mean()                             # Média de segurança local
-    total_crimes = int(filtered_data['TOTAL_CRIMES'].sum())                                 # Total de crimes na área filtrada             
+    current_total_count = filtered_data['DISPLAY_METRIC'].sum()                      # Total Dinâmico           
     safest_neighborhood = filtered_data.loc[filtered_data['SAFETY_SCORE'].idxmax()]         # Bairro mais seguro
     least_safe_neighborhood = filtered_data.loc[filtered_data['SAFETY_SCORE'].idxmin()]     # Bairro menos seguro
 
@@ -164,13 +203,13 @@ if not filtered_data.empty:
         st.metric('⭐ Nota Média de Segurança', f'{local_average_safety:.2f}/10')
 
     with col2:
-        st.metric('🚨 Total de Incidentes', f'{total_crimes}')
+        st.metric(f'🚨 {metric_title}', f'{current_total_count}') # <--- MUDANÇA AQUI
 
     with col3:
-        st.metric('🏆 Bairro Mais Seguro', safest_neighborhood['NM_BAIRRO_MATCH'], f'{safest_neighborhood['SAFETY_SCORE']:.1f}')
+        st.metric('🏆 Bairro Mais Seguro', safest_neighborhood['NM_BAIRRO_MATCH'], f'{safest_neighborhood["SAFETY_SCORE"]:.1f}')
 
     with col4:
-        st.metric('⚠️ Bairro Menos Seguro', least_safe_neighborhood['NM_BAIRRO_MATCH'], f'{least_safe_neighborhood['SAFETY_SCORE']:.1f}')
+        st.metric('⚠️ Bairro Menos Seguro', least_safe_neighborhood['NM_BAIRRO_MATCH'], f'{least_safe_neighborhood["SAFETY_SCORE"]:.1f}')
     
 else:
     st.warning('Nenhum bairro atende aos filtros selecionados.')
@@ -182,15 +221,29 @@ st.divider()
 
 st.markdown('### 🗺️ Mapa de Segurança por Bairro')
 
-    # Configuração do mapa
+
+# Bounds e Coords
+
+santos_coords = [-23.9618, -46.3322] # Centro
+sw_corner = [-24.05, -46.45] # Canto Inferior Esquerdo (Sul/Oeste)
+ne_corner = [-23.90, -46.25] # Canto Superior Direito (Norte/Leste)
+
+# Configuração do mapa
 
 m = folium.Map(
-    location=[-23.9618, -46.3322], 
-    zoom_start = 14, 
+    location=santos_coords, 
+    zoom_start = 13,
+    min_zoom=13,
+    max_zoom=15,
     tiles='Cartodb dark_matter',
     zoom_control=False, 
     control_scale=False, 
-    attribution_control=False)
+    attribution_control=False,
+    max_bounds=True,
+    min_lat=sw_corner[0],
+    max_lat=ne_corner[0],
+    min_lon=sw_corner[1],
+    max_lon=ne_corner[1])
 
 # Adiciona os bairros ao mapa
 
@@ -201,21 +254,30 @@ folium.Choropleth(
     key_on = 'feature.properties.NM_BAIRRO_MATCH',
     fill_color='RdYlGn',
     fill_opacity = 0.7,
-    line_opacity = 0.3,
+    line_opacity = 0.2,
     line_weight = 2,
     name = 'Nota de Segurança (0 a 10)',
     legend_name = 'Indice de Segurança por Bairro',
-    highlight = True).add_to(m)
+    highlight = False).add_to(m)
     
     
 style_function = lambda x: {
     'fillColor': '#ffffff', 
     'color':'#000000', 
-    'fillOpacity': 0.1, 
+    'fillOpacity': 0.0, 
     'weight': 0.1, 
     'padding': '4px', 
     'border-radius': '20px'}
-highlight_function = lambda x: {'fillColor': '#000000', 'color':'#000000', 'fillOpacity': 0.50, 'weight': 0.1}
+highlight_function = lambda x: {'fillColor': '#000000', 'color':'#000000', 'fillOpacity': 0.3, 'weight': 2}
+tooltip_fields = ['NM_BAIRRO_MATCH', 'DISPLAY_METRIC']
+tooltip_aliases = ['📍 Bairro:', f'📊 {metric_title}:']
+
+if show_weight_in_tooltip:
+    tooltip_fields.append('WEIGHT_METRIC')
+    tooltip_aliases.append('⚖️ Gravidade (Score):')
+
+tooltip_fields.append('SAFETY_SCORE')
+tooltip_aliases.append('🛡️ Índice de Segurança:')
 
 # GeoJson Hover
 
@@ -225,20 +287,20 @@ hover = folium.features.GeoJson(
     control=False,
     highlight_function=highlight_function,
     tooltip=folium.features.GeoJsonTooltip(
-        fields=['NM_BAIRRO_MATCH', 'FILTERED_OCCURRENCES', 'SAFETY_SCORE'],
-        aliases=['📍 Bairro:', f'📊 Ocorrências — {map_vision}:', '🛡️ Índice de Segurança:'],
+        fields = tooltip_fields,
+        aliases = tooltip_aliases,
         style=(
             'background-color: #12151C; '
             'color: white; '
             'font-family: Poppins, sans-serif; '
             'font-size: 14px; '
             'padding: 15px; '
-            'border-radius: 10px; '
+            'border-radius: 12px; '
             'border: 1px solid #00D4FF; '
-            'box-shadow: 3px 3px 10px rgba(0,0,0,0.5);'
+            'box-shadow: 3px 3px 10px rgba(0,0,0,0.8);'
         ),
         localize=True,
-        sticky=True
+        sticky=False
     )
 ).add_to(m)
 
@@ -254,36 +316,32 @@ g_col1, g_col2 = st.columns(2)
 
 with g_col1:
 
-
-    # Col1- Bairros Mais Seguros
-
-    with g_col1:
-        top_safest = filtered_data.sort_values('SAFETY_SCORE', ascending=False).head(10)
-        fig1 = px.bar(
-                        top_safest, x='SAFETY_SCORE', y='NM_BAIRRO_MATCH', 
-                        orientation='h',
-                        text = 'SAFETY_SCORE',
-                        labels={'SAFETY_SCORE': 'Índice de Segurança', 'NM_BAIRRO_MATCH': 'Bairro'},
-                        title='Top 10 Bairros Mais Seguros',
-                        color='SAFETY_SCORE', color_continuous_scale='RdYlGn', range_color=[0, 10]
-                        )
-        fig1.update_layout(yaxis={'categoryorder':'total ascending', 'title': ''}, xaxis={'title': ''}, height=600)
-        st.plotly_chart(fig1, width = 'stretch')
+    top_safest = filtered_data.sort_values('SAFETY_SCORE', ascending=False).head(10)
+    fig1 = px.bar(
+                    top_safest, x='SAFETY_SCORE', y='NM_BAIRRO_MATCH', 
+                    orientation='h',
+                    text = 'SAFETY_SCORE',
+                    labels={'SAFETY_SCORE': 'Índice de Segurança', 'NM_BAIRRO_MATCH': 'Bairro'},
+                    title='Top 10 Bairros Mais Seguros',
+                    color='SAFETY_SCORE', color_continuous_scale='RdYlGn', range_color=[0, 10]
+                    )
+    fig1.update_layout(yaxis={'categoryorder':'total ascending', 'title': ''}, xaxis={'title': ''}, height=600)
+    st.plotly_chart(fig1, width = 'stretch')
 
     # Col2 - Bairros Mais Críticos
 
-    with g_col2:
-        top_least_safe = filtered_data.sort_values('SAFETY_SCORE', ascending=True).head(10)
-        fig2 = px.bar(
-                        top_least_safe, x='SAFETY_SCORE', y='NM_BAIRRO_MATCH', 
-                        orientation='h',
-                        text = 'SAFETY_SCORE',
-                        labels={'SAFETY_SCORE': 'Índice de Segurança', 'NM_BAIRRO_MATCH': 'Bairro'},
-                        title='Top 10 Bairros Mais Críticos',
-                        color='SAFETY_SCORE', color_continuous_scale='RdYlGn', range_color=[0, 10]
-                        )
-        fig2.update_layout(yaxis={'categoryorder':'total ascending', 'title': ''}, xaxis={'title': ''}, height=600)
-        st.plotly_chart(fig2, width = 'stretch')
+with g_col2:
+    top_least_safe = filtered_data.sort_values('SAFETY_SCORE', ascending=True).head(10)
+    fig2 = px.bar(
+                    top_least_safe, x='SAFETY_SCORE', y='NM_BAIRRO_MATCH', 
+                    orientation='h',
+                    text = 'SAFETY_SCORE',
+                    labels={'SAFETY_SCORE': 'Índice de Segurança', 'NM_BAIRRO_MATCH': 'Bairro'},
+                    title='Top 10 Bairros Mais Críticos',
+                    color='SAFETY_SCORE', color_continuous_scale='RdYlGn', range_color=[0, 10]
+                    )
+    fig2.update_layout(yaxis={'categoryorder':'total ascending', 'title': ''}, xaxis={'title': ''}, height=600)
+    st.plotly_chart(fig2, width = 'stretch')
 
 # --- Tabela de Dados ---
 
